@@ -1,0 +1,6 @@
+node_modules/
+code.js
+src/*.js
+*.log
+.DS_Store
+output/
