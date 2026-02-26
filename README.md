@@ -128,7 +128,7 @@ npm run server -- --output-dir ./figma-output --assets-dir ./public/figma-assets
 ## Development
 
 ```bash
-npm run build:watch   # Rebuild plugin on file changes
+npm run dev           # Run server + rebuild plugin on file changes
 npm run typecheck     # Type check without emitting
 ```
 
