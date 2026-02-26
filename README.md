@@ -2,6 +2,8 @@
 
 Extract Figma designs into a structured format that AI coding tools can consume directly. Select components in Figma, run the extractor, point your AI dev tool at the output, and tell it to build.
 
+> **Note:** This is a prototype. It works well for common Figma patterns but may not handle every edge case. Use at your own risk and expect rough edges.
+
 ## What You Get
 
 For each Figma component, the extractor outputs:
@@ -105,11 +107,19 @@ output/
 ## Server Options
 
 ```bash
+# Lock the output directory (ignores changes from the plugin UI)
+npm run server -- --output-dir ./my-project/figma-output
+
 # Mirror all extracted assets to a second directory (e.g. your app's public folder)
 npm run server -- --assets-dir ./public/figma-assets
+
+# Combine both
+npm run server -- --output-dir ./figma-output --assets-dir ./public/figma-assets
 ```
 
-This copies every extracted image/SVG to the specified directory as they're extracted, so assets are immediately servable during development.
+`--output-dir` fixes the output path so the plugin UI can't change it. Without this flag, the output directory can be set from the plugin UI at runtime.
+
+`--assets-dir` copies every extracted image/SVG to the specified directory as they're extracted, so assets are immediately servable during development.
 
 ## Development
 
@@ -121,6 +131,12 @@ npm run typecheck     # Type check without emitting
 ## Port
 
 The server and plugin both use port `3846`. This is set in `manifest.json` (network access whitelist) and `ui.html` (fetch URL). To change it, update both files and run `npm run build`.
+
+## Security
+
+The local server provides filesystem access (directory browsing, file writing) so the Figma plugin can save extracted components. It binds to `127.0.0.1` (localhost only) and is **not intended to be exposed to a network**. Do not run it behind a reverse proxy or on `0.0.0.0`.
+
+If you want to restrict what the server can write to, use the `--output-dir` flag to lock it to a specific path.
 
 ## Troubleshooting
 

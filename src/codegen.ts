@@ -108,8 +108,8 @@ function inverseTransformPosition(
 }
 
 // Generate React/Tailwind code from Figma node
-export function generateReactCode(node: SceneNode, isSubComponent: boolean = false): string {
-  const componentName = toPascalCase(node.name);
+export function generateReactCode(node: SceneNode, isSubComponent: boolean = false, nameOverride?: string): string {
+  const componentName = nameOverride ? toPascalCase(nameOverride) : toPascalCase(node.name);
 
   // Build the component
   let code = `export default function ${componentName}() {\n`;
@@ -654,8 +654,8 @@ export function generateMainComponentCodeFromChildren(node: SceneNode, significa
 
 // Generate code for subcomponent with imports (flat version - just names)
 // Also renders non-subcomponent children inline (background images, decorative elements, etc.)
-export function generateSubComponentCodeFlat(node: SceneNode, nestedChildren: SignificantChild[]): string {
-  const componentName = toPascalCase(node.name);
+export function generateSubComponentCodeFlat(node: SceneNode, nestedChildren: SignificantChild[], nameOverride?: string): string {
+  const componentName = nameOverride ? toPascalCase(nameOverride) : toPascalCase(node.name);
 
   // Extract actual styles from the Figma node instead of hardcoding
   const styles = extractStyles(node, false);

@@ -318,11 +318,17 @@
     }
 
     extractBtn.onclick = async () => {
+      const raw = configTextarea.value.trim();
+      if (!raw) {
+        showStatus('No components loaded. Select frames in Figma and click "Load from Selection" first.', 'warning');
+        return;
+      }
+
       try {
-        const components = JSON.parse(configTextarea.value);
+        const components = JSON.parse(raw);
 
         if (!Array.isArray(components) || components.length === 0) {
-          showStatus('Invalid configuration. Please provide an array of components.', 'error');
+          showStatus('No components loaded. Select frames in Figma and click "Load from Selection" first.', 'warning');
           return;
         }
 
@@ -488,7 +494,8 @@
 
           const usedOutputDir = document.getElementById('outputDir').value.trim() || './output';
           downloadLinkDiv.innerHTML = `
-            <p>✓ ${window.extractionSuccess} components saved to ${usedOutputDir}/</p>
+            <p>&#10003; ${window.extractionSuccess} components saved to ${usedOutputDir}/</p>
+            <p style="margin-top: 6px;"><a href="${serverUrl}/view?dir=${encodeURIComponent(usedOutputDir)}" target="_blank" style="color: #1976d2; text-decoration: underline; font-weight: 500;">View Extracted Components</a></p>
           `;
           downloadLinkDiv.style.display = 'block';
         } else {

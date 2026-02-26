@@ -2,11 +2,15 @@
   "name": "figma-extractor",
   "version": "1.0.0",
   "description": "BQ Figma plugin to extract components as React/Tailwind code with assets",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "esbuild src/code.ts --bundle --outfile=code.js --target=es6",
     "build:watch": "esbuild src/code.ts --bundle --outfile=code.js --target=es6 --watch",
     "typecheck": "tsc --noEmit",
-    "server": "node server.js"
+    "server": "node server.js",
+    "dev": "node --watch server.js & npm run build:watch"
   },
   "dependencies": {
     "cors": "^2.8.5",

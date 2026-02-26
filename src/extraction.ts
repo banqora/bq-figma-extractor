@@ -26,10 +26,10 @@ export async function extractAndStreamSubComponents(
       // Generate code
       let code: string;
       if (nestedSignificant.length > 0) {
-        // Has children - generate imports
-        code = generateSubComponentCodeFlat(child.node, nestedSignificant);
+        // Has children - generate imports; use uniqueName so function name matches the import alias
+        code = generateSubComponentCodeFlat(child.node, nestedSignificant, child.uniqueName);
       } else {
-        code = generateReactCode(child.node, true);
+        code = generateReactCode(child.node, true, child.uniqueName);
       }
 
       // Extract assets (excluding nested children)
