@@ -402,8 +402,10 @@ app.get('/figma-assets/:filename', async (req, res) => {
 // Returns { functions: string[], rootName: string } where functions are ordered
 // leaves-first so each component is defined before it's referenced.
 // expectedName: if provided, rename the function to match the parent's import alias.
-async function bundleComponent(componentDir, visited, expectedName) {
+// usedNames: tracks all function names across the entire bundle to avoid collisions.
+async function bundleComponent(componentDir, visited, expectedName, usedNames) {
   visited = visited || new Set();
+  usedNames = usedNames || new Set();
   const codePath = path.join(componentDir, 'component.tsx');
 
   if (!await fs.pathExists(codePath)) return { functions: [], rootName: null };
@@ -420,14 +422,18 @@ async function bundleComponent(componentDir, visited, expectedName) {
     if (m) imports.push({ name: m[1], relPath: m[2] });
   }
 
-  // Recursively bundle each imported subcomponent first, passing the import alias as expectedName
+  // Recursively bundle each imported subcomponent first, passing the import alias as expectedName.
+  // Track renames so we can patch JSX references in this component's code.
+  const renames = new Map(); // originalImportName -> actualBundledName
   const childFunctions = [];
   for (const imp of imports) {
-    // Resolve relative path from current component dir
     const resolvedDir = path.resolve(componentDir, path.dirname(imp.relPath));
-    const child = await bundleComponent(resolvedDir, visited, imp.name);
+    const child = await bundleComponent(resolvedDir, visited, imp.name, usedNames);
     if (child.functions.length > 0) {
       childFunctions.push(...child.functions);
+    }
+    if (child.rootName && child.rootName !== imp.name) {
+      renames.set(imp.name, child.rootName);
     }
   }
 
@@ -437,9 +443,24 @@ async function bundleComponent(componentDir, visited, expectedName) {
   // Remove 'export default' and extract the declared name
   const nameMatch = code.match(/export\s+default\s+function\s+(\w+)/);
   const declaredName = nameMatch ? nameMatch[1] : null;
-  // Use expectedName (from parent import) if provided, otherwise keep declared name
-  const compName = expectedName || declaredName;
+  let compName = expectedName || declaredName;
+
+  // Deduplicate: if this name is already used in the bundle, add a numeric suffix
+  if (usedNames.has(compName)) {
+    let suffix = 2;
+    while (usedNames.has(compName + '_' + suffix)) suffix++;
+    compName = compName + '_' + suffix;
+  }
+  usedNames.add(compName);
+
   code = code.replace(/export\s+default\s+function\s+\w+/, 'function ' + compName);
+
+  // Patch JSX references for any children that were renamed due to collisions
+  for (const [origName, newName] of renames) {
+    // Replace <OrigName .../>, <OrigName>...</OrigName>, and <OrigName />
+    code = code.replace(new RegExp('<' + origName + '(\\s|/|>)', 'g'), '<' + newName + '$1');
+    code = code.replace(new RegExp('</' + origName + '>', 'g'), '</' + newName + '>');
+  }
 
   return {
     functions: [...childFunctions, code],

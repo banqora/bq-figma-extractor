@@ -81,7 +81,7 @@ export async function extractAndStreamSubComponents(
   return extractedPaths;
 }
 
-export async function extractComponent(config: ComponentConfig, flat = false): Promise<ExtractedComponent | null> {
+export async function extractComponent(config: ComponentConfig, flat = false, baseName?: string): Promise<ExtractedComponent | null> {
   log('info', `Starting extraction`, { id: config.id, name: config.name, title: config.title });
 
   try {
@@ -154,7 +154,7 @@ export async function extractComponent(config: ComponentConfig, flat = false): P
       });
 
       // Stream subcomponents to server as they're extracted (avoids memory buildup)
-      extractedPaths = await extractAndStreamSubComponents(node, '', config.name);
+      extractedPaths = await extractAndStreamSubComponents(node, '', baseName || config.name);
       log('info', `Streamed ${extractedPaths.length} subcomponents to server`);
 
       // Generate main component code (with imports based on significant children)

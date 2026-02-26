@@ -251,6 +251,11 @@
     <input id="assetPathPrefix" type="text" placeholder="/figma-assets" value="/figma-assets" style="flex: 1; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: Monaco, monospace; font-size: 11px;" />
   </div>
 
+  <label style="display: flex; align-items: center; gap: 6px; margin-bottom: 12px; cursor: pointer;">
+    <input id="decompose" type="checkbox" checked style="margin: 0;" />
+    <span>Decompose into subcomponents</span>
+  </label>
+
   <label for="config">Component Configuration (JSON):</label>
   <textarea id="config" placeholder='[
   {
@@ -360,10 +365,12 @@
           }
         }, '*');
 
+        const decompose = document.getElementById('decompose').checked;
         parent.postMessage({
           pluginMessage: {
             type: 'extract',
-            components
+            components,
+            decompose
           }
         }, '*');
 
