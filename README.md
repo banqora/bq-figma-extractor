@@ -4,6 +4,10 @@ Extract Figma designs into a structured format that AI coding tools can consume 
 
 > **Note:** This is a prototype. It works well for common Figma patterns but may not handle every edge case. Use at your own risk and expect rough edges.
 
+<img src="docs/plugin-ui.png" alt="BQ Figma Extractor plugin UI" width="400" />
+
+<img src="docs/viewer-ui.png" alt="Component viewer with code output" width="800" />
+
 ## What You Get
 
 For each Figma component, the extractor outputs:
