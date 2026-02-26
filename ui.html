@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BQ Figma Extractor</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+      padding: 16px;
+      background: #fff;
+    }
+
+    h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #000;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: #333;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 11px;
+      margin-bottom: 12px;
+      resize: vertical;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button.primary {
+      background: #18A0FB;
+      color: white;
+    }
+
+    button.primary:hover {
+      background: #1585CC;
+    }
+
+    button.primary:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    button.secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    button.secondary:hover {
+      background: #e0e0e0;
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      display: none;
+    }
+
+    .status.visible {
+      display: block;
+    }
+
+    .status.info {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+
+    .status.success {
+      background: #e8f5e9;
+      color: #388e3c;
+    }
+
+    .status.error {
+      background: #ffebee;
+      color: #d32f2f;
+    }
+
+    .status.warning {
+      background: #fff3e0;
+      color: #f57c00;
+    }
+
+    .progress {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #666;
+    }
+
+    .help {
+      margin-top: 12px;
+      padding: 8px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-size: 10px;
+      color: #666;
+      line-height: 1.5;
+    }
+
+    .help code {
+      background: #fff;
+      padding: 2px 4px;
+      border-radius: 2px;
+      font-family: Monaco, monospace;
+    }
+
+    #downloadLink {
+      display: none;
+      margin-top: 12px;
+      padding: 8px;
+      background: #e8f5e9;
+      border-radius: 4px;
+      text-align: center;
+    }
+
+    #downloadLink a {
+      color: #388e3c;
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    #downloadLink a:hover {
+      text-decoration: underline;
+    }
+
+    /* Directory browser modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+    }
+    .modal-overlay.visible { display: flex; align-items: center; justify-content: center; }
+
+    .modal {
+      background: #fff;
+      border-radius: 8px;
+      width: 340px;
+      max-height: 400px;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    }
+
+    .modal-header {
+      padding: 12px;
+      border-bottom: 1px solid #eee;
+      font-weight: 600;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-path {
+      padding: 8px 12px;
+      background: #f5f5f5;
+      font-family: Monaco, monospace;
+      font-size: 10px;
+      color: #555;
+      border-bottom: 1px solid #eee;
+      word-break: break-all;
+    }
+
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 150px;
+    }
+
+    .dir-item {
+      padding: 6px 12px;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .dir-item:hover { background: #e3f2fd; }
+    .dir-item.parent-dir { color: #888; font-style: italic; }
+
+    .modal-footer {
+      padding: 8px 12px;
+      border-top: 1px solid #eee;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .modal-footer button { flex: none; padding: 6px 16px; font-size: 11px; }
+
+    .browse-btn {
+      flex: none;
+      padding: 6px 12px;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .browse-btn:hover { background: #e0e0e0; }
+  </style>
+</head>
+<body>
+  <h2>BQ Figma Extractor</h2>
+
+  <label for="outputDir">Output Directory:</label>
+  <div style="display: flex; gap: 4px; margin-bottom: 12px;">
+    <input id="outputDir" type="text" placeholder="./output" style="flex: 1; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: Monaco, monospace; font-size: 11px;" />
+    <button id="browseBtn" class="browse-btn">Browse</button>
+  </div>
+
+  <label for="assetPathPrefix">Asset Path Prefix (in generated code):</label>
+  <div style="display: flex; gap: 4px; margin-bottom: 12px;">
+    <input id="assetPathPrefix" type="text" placeholder="/figma-assets" value="/figma-assets" style="flex: 1; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-family: Monaco, monospace; font-size: 11px;" />
+  </div>
+
+  <label for="config">Component Configuration (JSON):</label>
+  <textarea id="config" placeholder='[
+  {
+    "id": "861:646",
+    "name": "01-news-banner",
+    "title": "News Banner"
+  },
+  {
+    "id": "335:2082",
+    "name": "02-hero-section",
+    "title": "Hero Section"
+  }
+]'></textarea>
+
+  <div class="button-group">
+    <button id="loadConfigBtn" class="secondary">Load from Selection</button>
+    <button id="extractBtn" class="primary">Extract Components</button>
+    <button id="cancelBtn" class="secondary">Cancel</button>
+  </div>
+
+  <div id="status" class="status"></div>
+  <div id="progress" class="progress"></div>
+  <div id="downloadLink"></div>
+
+  <div class="help">
+    <strong>How to use:</strong><br>
+    1. Select frames/components in Figma<br>
+    2. Click <code>Load from Selection</code><br>
+    3. Click <code>Extract Components</code>
+  </div>
+
+  <!-- Directory browser modal -->
+  <div id="dirModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span>Choose Directory</span>
+        <button id="dirModalClose" style="border:none; background:none; cursor:pointer; font-size:16px; color:#999;">&times;</button>
+      </div>
+      <div id="dirModalPath" class="modal-path"></div>
+      <div id="dirModalBody" class="modal-body"></div>
+      <div class="modal-footer">
+        <button id="dirModalCancel" class="secondary">Cancel</button>
+        <button id="dirModalSelect" class="primary">Select</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const extractBtn = document.getElementById('extractBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const configTextarea = document.getElementById('config');
+    const statusDiv = document.getElementById('status');
+    const progressDiv = document.getElementById('progress');
+    const downloadLinkDiv = document.getElementById('downloadLink');
+
+    let serverUrl = 'http://localhost:3846'; // Local server to receive data
+
+    function showStatus(message, type = 'info') {
+      statusDiv.textContent = message;
+      statusDiv.className = `status visible ${type}`;
+    }
+
+    function showProgress(message) {
+      progressDiv.textContent = message;
+    }
+
+    extractBtn.onclick = async () => {
+      try {
+        const components = JSON.parse(configTextarea.value);
+
+        if (!Array.isArray(components) || components.length === 0) {
+          showStatus('Invalid configuration. Please provide an array of components.', 'error');
+          return;
+        }
+
+        extractBtn.disabled = true;
+        showStatus('Starting extraction...', 'info');
+        showProgress('');
+        downloadLinkDiv.style.display = 'none';
+
+        // Send output dir to server
+        const outputDir = document.getElementById('outputDir').value.trim() || './output';
+        try {
+          await fetch(`${serverUrl}/set-output-dir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ outputDir })
+          });
+        } catch (e) {
+          showStatus('Failed to set output directory on server', 'error');
+          extractBtn.disabled = false;
+          return;
+        }
+
+        // Send asset path prefix config to plugin
+        const assetPathPrefix = document.getElementById('assetPathPrefix').value.trim() || '/figma-assets';
+        parent.postMessage({
+          pluginMessage: {
+            type: 'set-config',
+            assetPathPrefix
+          }
+        }, '*');
+
+        parent.postMessage({
+          pluginMessage: {
+            type: 'extract',
+            components
+          }
+        }, '*');
+
+      } catch (error) {
+        showStatus(`Invalid JSON: ${error.message}`, 'error');
+      }
+    };
+
+    cancelBtn.onclick = () => {
+      parent.postMessage({ pluginMessage: { type: 'cancel' } }, '*');
+    };
+
+    const loadConfigBtn = document.getElementById('loadConfigBtn');
+    loadConfigBtn.onclick = () => {
+      // Request components from current Figma selection
+      parent.postMessage({ pluginMessage: { type: 'load-selection' } }, '*');
+    };
+
+    // Handle messages from plugin code
+    window.onmessage = async (event) => {
+      const msg = event.data.pluginMessage;
+
+      if (msg.type === 'status') {
+        showStatus(msg.message, 'info');
+      }
+
+      if (msg.type === 'progress') {
+        showProgress(`[${msg.current}/${msg.total}] ${msg.message}`);
+      }
+
+      if (msg.type === 'warning') {
+        showStatus(msg.message, 'warning');
+      }
+
+      if (msg.type === 'error') {
+        showStatus(msg.message, 'error');
+        extractBtn.disabled = false;
+      }
+
+      if (msg.type === 'log-error') {
+        // Send error to server for persistent logging
+        fetch(`${serverUrl}/log-error`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            component: msg.component,
+            error: msg.error,
+            stack: msg.stack
+          })
+        }).catch(() => {});
+      }
+
+      if (msg.type === 'selection-loaded') {
+        if (msg.components.length > 0) {
+          configTextarea.value = JSON.stringify(msg.components, null, 2);
+          showStatus(msg.message, 'success');
+        } else {
+          showStatus(msg.message, 'warning');
+        }
+      }
+
+      if (msg.type === 'extraction-start') {
+        window.extractionTotal = msg.total;
+        window.extractionSuccess = 0;
+        showStatus(`Starting extraction of ${msg.total} components...`, 'info');
+      }
+
+      if (msg.type === 'component-extracted') {
+        // Send each component to server immediately
+        try {
+          const response = await fetch(`${serverUrl}/extract-single`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ component: msg.component })
+          });
+          if (response.ok) {
+            window.extractionSuccess++;
+            showProgress(`Saved: ${msg.component.title} (${window.extractionSuccess}/${window.extractionTotal})`);
+          } else {
+            showStatus(`Failed to save ${msg.component.title}`, 'warning');
+          }
+        } catch (error) {
+          showStatus(`Server error saving ${msg.component.title}`, 'error');
+        }
+      }
+
+      if (msg.type === 'subcomponent-extracted') {
+        // Send each subcomponent to server immediately
+        try {
+          const response = await fetch(`${serverUrl}/extract-subcomponent`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              componentName: msg.componentName,
+              subComponent: msg.subComponent 
+            })
+          });
+          if (response.ok) {
+            showProgress(`Saved subcomponent: ${msg.subComponent.path}`);
+          }
+        } catch (error) {
+          // Don't block on subcomponent errors
+          console.error('Failed to save subcomponent:', error);
+        }
+      }
+
+      if (msg.type === 'extraction-complete') {
+        extractBtn.disabled = false;
+
+        if (window.extractionSuccess > 0) {
+          // Finalize: generate top-level re-exports for subcomponents
+          showStatus('Generating re-exports...', 'info');
+          try {
+            const finalizeRes = await fetch(`${serverUrl}/finalize`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({})
+            });
+            if (finalizeRes.ok) {
+              const { reExportCount } = await finalizeRes.json();
+              showStatus(`${msg.message} (${reExportCount} re-exports)`, 'success');
+            } else {
+              showStatus(msg.message, 'success');
+            }
+          } catch (e) {
+            showStatus(msg.message, 'success');
+          }
+
+          const usedOutputDir = document.getElementById('outputDir').value.trim() || './output';
+          downloadLinkDiv.innerHTML = `
+            <p>✓ ${window.extractionSuccess} components saved to ${usedOutputDir}/</p>
+          `;
+          downloadLinkDiv.style.display = 'block';
+        } else {
+          showStatus(msg.message, 'success');
+        }
+      }
+    };
+
+    // --- Directory browser ---
+    const dirModal = document.getElementById('dirModal');
+    const dirModalPath = document.getElementById('dirModalPath');
+    const dirModalBody = document.getElementById('dirModalBody');
+    let browseCurrent = '';
+
+    async function browseDir(dirPath) {
+      try {
+        const res = await fetch(`${serverUrl}/browse?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) { dirModalBody.textContent = data.error; return; }
+
+        browseCurrent = data.current;
+        dirModalPath.textContent = data.current;
+        dirModalBody.innerHTML = '';
+
+        // Parent directory link
+        if (data.parent && data.parent !== data.current) {
+          const parentEl = document.createElement('div');
+          parentEl.className = 'dir-item parent-dir';
+          parentEl.textContent = '.. (parent)';
+          parentEl.onclick = () => browseDir(data.parent);
+          dirModalBody.appendChild(parentEl);
+        }
+
+        for (const name of data.dirs) {
+          const el = document.createElement('div');
+          el.className = 'dir-item';
+          el.innerHTML = `<span style="opacity:0.5">&#128193;</span> ${name}`;
+          el.onclick = () => browseDir(data.current + '/' + name);
+          dirModalBody.appendChild(el);
+        }
+
+        if (data.dirs.length === 0) {
+          const empty = document.createElement('div');
+          empty.style.cssText = 'padding: 12px; color: #999; font-size: 11px; text-align: center;';
+          empty.textContent = 'No subdirectories';
+          dirModalBody.appendChild(empty);
+        }
+      } catch (e) {
+        dirModalBody.textContent = 'Failed to browse: ' + e.message;
+      }
+    }
+
+    document.getElementById('browseBtn').onclick = () => {
+      const current = document.getElementById('outputDir').value.trim();
+      dirModal.classList.add('visible');
+      browseDir(current || '.');
+    };
+
+    document.getElementById('dirModalClose').onclick =
+    document.getElementById('dirModalCancel').onclick = () => {
+      dirModal.classList.remove('visible');
+    };
+
+    document.getElementById('dirModalSelect').onclick = () => {
+      document.getElementById('outputDir').value = browseCurrent;
+      dirModal.classList.remove('visible');
+    };
+
+    // Check server is reachable on startup and load current output dir
+    fetch(`${serverUrl}/health`).then(r => r.json()).then(data => {
+      if (data.outputDir) {
+        document.getElementById('outputDir').value = data.outputDir;
+      }
+      showStatus('Server connected. Select frames in Figma and click "Load from Selection".', 'success');
+    }).catch(() => {
+      showStatus('Server not running. Start it with: npm run server', 'info');
+    });
+  </script>
+</body>
+</html>
