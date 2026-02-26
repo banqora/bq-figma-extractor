@@ -71,6 +71,7 @@ figma.ui.onmessage = async (msg) => {
 
   if (msg.type === 'extract') {
     const components: ComponentConfig[] = msg.components;
+    const decompose: boolean = msg.decompose !== false; // default true
 
     try {
       let successCount = 0;
@@ -101,10 +102,17 @@ figma.ui.onmessage = async (msg) => {
           message: `Extracting: ${displayName}`
         });
 
-        const result = await extractComponent(comp, !!parentName);
+        // baseName is the full folder path: parentName/comp.name when nested under a section
+        const baseName = parentName ? `${parentName}/${comp.name}` : undefined;
+        const result = await extractComponent(comp, !decompose, baseName);
         if (result) {
           if (parentName) {
             // Stream as subcomponent under the parent folder
+            // Include subComponentPaths so the viewer knows about nested subcomponents
+            const metadata = { ...result.metadata };
+            if (result.subComponentPaths && result.subComponentPaths.length > 0) {
+              metadata.subComponentPaths = result.subComponentPaths;
+            }
             figma.ui.postMessage({
               type: 'subcomponent-extracted',
               componentName: parentName,
@@ -115,7 +123,7 @@ figma.ui.onmessage = async (msg) => {
                 rawFigma: result.rawFigma,
                 screenshot: result.screenshot,
                 assets: result.assets,
-                metadata: result.metadata,
+                metadata,
                 skipReExport: true
               }
             });

@@ -402,8 +402,10 @@ app.get('/figma-assets/:filename', async (req, res) => {
 // Returns { functions: string[], rootName: string } where functions are ordered
 // leaves-first so each component is defined before it's referenced.
 // expectedName: if provided, rename the function to match the parent's import alias.
-async function bundleComponent(componentDir, visited, expectedName) {
+// usedNames: tracks all function names across the entire bundle to avoid collisions.
+async function bundleComponent(componentDir, visited, expectedName, usedNames) {
   visited = visited || new Set();
+  usedNames = usedNames || new Set();
   const codePath = path.join(componentDir, 'component.tsx');
 
   if (!await fs.pathExists(codePath)) return { functions: [], rootName: null };
@@ -420,14 +422,18 @@ async function bundleComponent(componentDir, visited, expectedName) {
     if (m) imports.push({ name: m[1], relPath: m[2] });
   }
 
-  // Recursively bundle each imported subcomponent first, passing the import alias as expectedName
+  // Recursively bundle each imported subcomponent first, passing the import alias as expectedName.
+  // Track renames so we can patch JSX references in this component's code.
+  const renames = new Map(); // originalImportName -> actualBundledName
   const childFunctions = [];
   for (const imp of imports) {
-    // Resolve relative path from current component dir
     const resolvedDir = path.resolve(componentDir, path.dirname(imp.relPath));
-    const child = await bundleComponent(resolvedDir, visited, imp.name);
+    const child = await bundleComponent(resolvedDir, visited, imp.name, usedNames);
     if (child.functions.length > 0) {
       childFunctions.push(...child.functions);
+    }
+    if (child.rootName && child.rootName !== imp.name) {
+      renames.set(imp.name, child.rootName);
     }
   }
 
@@ -437,9 +443,24 @@ async function bundleComponent(componentDir, visited, expectedName) {
   // Remove 'export default' and extract the declared name
   const nameMatch = code.match(/export\s+default\s+function\s+(\w+)/);
   const declaredName = nameMatch ? nameMatch[1] : null;
-  // Use expectedName (from parent import) if provided, otherwise keep declared name
-  const compName = expectedName || declaredName;
+  let compName = expectedName || declaredName;
+
+  // Deduplicate: if this name is already used in the bundle, add a numeric suffix
+  if (usedNames.has(compName)) {
+    let suffix = 2;
+    while (usedNames.has(compName + '_' + suffix)) suffix++;
+    compName = compName + '_' + suffix;
+  }
+  usedNames.add(compName);
+
   code = code.replace(/export\s+default\s+function\s+\w+/, 'function ' + compName);
+
+  // Patch JSX references for any children that were renamed due to collisions
+  for (const [origName, newName] of renames) {
+    // Replace <OrigName .../>, <OrigName>...</OrigName>, and <OrigName />
+    code = code.replace(new RegExp('<' + origName + '(\\s|/|>)', 'g'), '<' + newName + '$1');
+    code = code.replace(new RegExp('</' + origName + '>', 'g'), '</' + newName + '>');
+  }
 
   return {
     functions: [...childFunctions, code],
@@ -698,7 +719,18 @@ app.get('/view', async (req, res) => {
   .card-header .meta { font-size: 11px; color: #888; }
   .card-body { display: flex; gap: 0; }
   .screenshot-col { flex: 0 0 300px; border-right: 1px solid #f0f0f0; padding: 16px; background: #fafafa; display: flex; align-items: flex-start; justify-content: center; }
-  .screenshot-col img { max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #eee; }
+  .screenshot-col img { max-width: 100%; max-height: 200px; object-fit: contain; border-radius: 4px; border: 1px solid #eee; }
+  .screenshot-col { position: relative; }
+  .screenshot-col img { cursor:pointer; }
+  .screenshot-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:200; overflow:auto; cursor:grab; }
+  .screenshot-overlay.dragging { cursor:grabbing; }
+  .screenshot-overlay.visible { display:block; }
+  .screenshot-overlay img { display:block; margin:20px auto; max-width:90%; cursor:grab; user-select:none; -webkit-user-drag:none; transform-origin:center top; }
+  .screenshot-overlay.dragging img { cursor:grabbing; }
+  .ss-toolbar { position:fixed; top:12px; right:16px; display:flex; gap:6px; z-index:201; }
+  .ss-toolbar button { background:rgba(255,255,255,0.15); color:#fff; border:none; border-radius:6px; padding:6px 12px; font-size:13px; cursor:pointer; }
+  .ss-toolbar button:hover { background:rgba(255,255,255,0.3); }
+  .ss-toolbar .ss-zoom-level { color:rgba(255,255,255,0.6); font-size:12px; padding:6px 4px; }
   .code-col { flex: 1; min-width: 0; position: relative; }
   .code-col pre { margin: 0; padding: 16px; font-size: 12px; line-height: 1.5; font-family: 'SF Mono', Monaco, 'Courier New', monospace; overflow-x: auto; max-height: 500px; overflow-y: auto; white-space: pre; background: #fff; }
   .code-col .loading { padding: 16px; color: #999; font-size: 12px; }
@@ -775,7 +807,7 @@ components.map(c => {
     </div>
     <div class="card-body">
       <div class="screenshot-col">
-        ${c.hasScreenshot ? `<img src="/view/screenshot/${c.name}?dir=${encodeURIComponent(viewDir)}" alt="${escapeHtml(c.title)}" loading="lazy" />` : '<div class="no-screenshot">No screenshot</div>'}
+        ${c.hasScreenshot ? `<img src="/view/screenshot/${c.name}?dir=${encodeURIComponent(viewDir)}" alt="${escapeHtml(c.title)}" loading="lazy" onclick="popScreenshot(this.src)" />` : '<div class="no-screenshot">No screenshot</div>'}
       </div>
       <div class="code-col" id="code-${safeId}">
         <button class="copy-btn" onclick="copyCode('${safeId}')">Copy</button>
@@ -787,14 +819,14 @@ components.map(c => {
       <details>
         <summary>${c.subComponents.length} subcomponent${c.subComponents.length !== 1 ? 's' : ''}</summary>
         ${c.subComponents.map(s => `
-        <div class="sub-item">
+        <div class="sub-item" data-search="${escapeHtml((s.name + ' ' + s.path).toLowerCase())}">
           <div class="card-header">
             <h3>${escapeHtml(s.name)}</h3>
             <span class="meta">${s.path}${s.hasCode ? ` | <a href="/view/preview/${c.name}/${s.path}?dir=${encodeURIComponent(viewDir)}" target="_blank" style="color:#18A0FB;text-decoration:none;">Preview</a>` : ''}</span>
           </div>
           <div class="card-body">
             <div class="screenshot-col">
-              ${s.hasScreenshot ? `<img src="/view/screenshot/${c.name}/${s.path}?dir=${encodeURIComponent(viewDir)}" alt="${escapeHtml(s.name)}" loading="lazy" />` : '<div class="no-screenshot">No screenshot</div>'}
+              ${s.hasScreenshot ? `<img src="/view/screenshot/${c.name}/${s.path}?dir=${encodeURIComponent(viewDir)}" alt="${escapeHtml(s.name)}" loading="lazy" onclick="popScreenshot(this.src)" />` : '<div class="no-screenshot">No screenshot</div>'}
             </div>
             <div class="code-col" id="code-${safeId}--${s.path.replace(/\//g, '--')}">
               <button class="copy-btn" onclick="copyCode('${safeId}--${s.path.replace(/\//g, '--')}')">Copy</button>
@@ -808,9 +840,71 @@ components.map(c => {
   </div>
 `}).join('')}
 </div>
+<div id="ssOverlay" class="screenshot-overlay"><div class="ss-toolbar"><button onclick="ssZoom(-1)">−</button><span class="ss-zoom-level" id="ssZoomLevel">100%</span><button onclick="ssZoom(1)">+</button><button onclick="ssResetZoom()">Fit</button><button onclick="closeSsOverlay()">&times;</button></div><img id="ssOverlayImg" src="" /></div>
 <script>
 const codeCache = {};
 const viewDir = ${JSON.stringify(viewDir)};
+
+var ssScale = 1;
+function popScreenshot(src) {
+  var overlay = document.getElementById('ssOverlay');
+  var img = document.getElementById('ssOverlayImg');
+  img.src = src;
+  ssScale = 1;
+  img.style.transform = '';
+  img.style.maxWidth = '90%';
+  document.getElementById('ssZoomLevel').textContent = '100%';
+  overlay.scrollTop = 0;
+  overlay.scrollLeft = 0;
+  overlay.classList.add('visible');
+}
+function closeSsOverlay() { document.getElementById('ssOverlay').classList.remove('visible'); }
+function ssApplyZoom() {
+  var img = document.getElementById('ssOverlayImg');
+  if (ssScale <= 1) {
+    img.style.maxWidth = '90%';
+    img.style.transform = ssScale < 1 ? 'scale(' + ssScale + ')' : '';
+  } else {
+    img.style.maxWidth = 'none';
+    img.style.transform = 'scale(' + ssScale + ')';
+  }
+  document.getElementById('ssZoomLevel').textContent = Math.round(ssScale * 100) + '%';
+}
+function ssZoom(dir) {
+  var steps = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+  var idx = steps.indexOf(ssScale);
+  if (idx < 0) { idx = steps.reduce(function(best, v, i) { return Math.abs(v - ssScale) < Math.abs(steps[best] - ssScale) ? i : best; }, 0); }
+  idx = Math.max(0, Math.min(steps.length - 1, idx + dir));
+  ssScale = steps[idx];
+  ssApplyZoom();
+}
+function ssResetZoom() { ssScale = 1; ssApplyZoom(); }
+// Drag to pan + scroll wheel zoom
+(function() {
+  var ol = document.getElementById('ssOverlay');
+  var dragging = false, startX, startY, scrollX, scrollY;
+  ol.addEventListener('mousedown', function(e) {
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SPAN') return;
+    dragging = true;
+    ol.classList.add('dragging');
+    startX = e.clientX; startY = e.clientY;
+    scrollX = ol.scrollLeft; scrollY = ol.scrollTop;
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    ol.scrollLeft = scrollX - (e.clientX - startX);
+    ol.scrollTop = scrollY - (e.clientY - startY);
+  });
+  window.addEventListener('mouseup', function() { dragging = false; ol.classList.remove('dragging'); });
+  ol.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    ssZoom(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  window.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeSsOverlay();
+  });
+})();
 
 function dirParam() {
   return 'dir=' + encodeURIComponent(viewDir);
@@ -899,24 +993,88 @@ function selectDir() {
 
 document.getElementById('dirInput').addEventListener('keydown', function(e) { if (e.key === 'Enter') goToDir(); });
 
-// Search / filter components
+// Search / filter components and subcomponents with relevance sorting
 const searchInput = document.getElementById('searchInput');
 const searchCount = document.getElementById('searchCount');
-searchInput.addEventListener('input', function() {
-  const query = this.value.toLowerCase().trim();
-  const cards = document.querySelectorAll('.component-card');
-  let visible = 0;
-  cards.forEach(function(card) {
-    const match = !query || card.dataset.search.includes(query);
-    card.style.display = match ? '' : 'none';
-    if (match) visible++;
-  });
-  if (query) {
-    searchCount.style.display = 'block';
-    searchCount.textContent = visible + ' of ' + cards.length + ' component' + (cards.length !== 1 ? 's' : '');
-  } else {
-    searchCount.style.display = 'none';
+const container = document.querySelector('.container');
+
+function scoreText(text, query) {
+  if (!text.includes(query)) return -1;
+  var words = text.split(/[\\s\\/]+/);
+  var best = 3;
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i];
+    if (w === query) { best = 0; break; }
+    else if (w.startsWith(query)) { best = Math.min(best, 1); }
+    else if (w.includes(query)) { best = Math.min(best, 2); }
   }
+  return best + (text.length / 10000);
+}
+
+searchInput.addEventListener('input', function() {
+  var query = this.value.toLowerCase().trim();
+  var cards = Array.from(document.querySelectorAll('.component-card'));
+  if (!query) {
+    cards.forEach(function(card) {
+      card.style.display = '';
+      // Reset sub-items visibility and close details
+      card.querySelectorAll('.sub-item').forEach(function(si) { si.style.display = ''; });
+      var det = card.querySelector('details');
+      if (det) det.removeAttribute('open');
+    });
+    searchCount.style.display = 'none';
+    cards.sort(function(a, b) { return a.dataset.search.localeCompare(b.dataset.search); });
+    cards.forEach(function(card) { container.appendChild(card); });
+    return;
+  }
+
+  var scored = cards.map(function(card) {
+    var cardScore = scoreText(card.dataset.search, query);
+    // Filter sub-items individually
+    var subItems = card.querySelectorAll('.sub-item');
+    var hasMatchingSub = false;
+    var bestSubScore = Infinity;
+    subItems.forEach(function(si) {
+      var subScore = scoreText(si.dataset.search || '', query);
+      if (subScore >= 0) {
+        si.style.display = '';
+        hasMatchingSub = true;
+        bestSubScore = Math.min(bestSubScore, subScore);
+      } else {
+        si.style.display = 'none';
+      }
+    });
+    // Auto-open details if a sub-item matches
+    var det = card.querySelector('details');
+    if (det) {
+      if (hasMatchingSub) { det.setAttribute('open', ''); }
+      else { det.removeAttribute('open'); }
+    }
+    // Card is visible if the card itself or any sub-item matches
+    var cardTitleScore = scoreText((card.querySelector('h2') || {}).textContent.toLowerCase() || '', query);
+    if (cardScore < 0 && !hasMatchingSub) return { card: card, score: -1 };
+    // Use best score among: card title, card full text, best sub-item
+    var finalScore = Math.min(
+      cardTitleScore >= 0 ? cardTitleScore : Infinity,
+      cardScore >= 0 ? cardScore : Infinity,
+      hasMatchingSub ? bestSubScore : Infinity
+    );
+    return { card: card, score: finalScore };
+  });
+
+  scored.sort(function(a, b) { return a.score - b.score; });
+  var visible = 0;
+  scored.forEach(function(item) {
+    if (item.score < 0) {
+      item.card.style.display = 'none';
+    } else {
+      item.card.style.display = '';
+      visible++;
+    }
+    container.appendChild(item.card);
+  });
+  searchCount.style.display = 'block';
+  searchCount.textContent = visible + ' of ' + cards.length + ' component' + (cards.length !== 1 ? 's' : '');
 });
 
 // Load code for all visible components
