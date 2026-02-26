@@ -108,6 +108,11 @@ figma.ui.onmessage = async (msg) => {
         if (result) {
           if (parentName) {
             // Stream as subcomponent under the parent folder
+            // Include subComponentPaths so the viewer knows about nested subcomponents
+            const metadata = { ...result.metadata };
+            if (result.subComponentPaths && result.subComponentPaths.length > 0) {
+              metadata.subComponentPaths = result.subComponentPaths;
+            }
             figma.ui.postMessage({
               type: 'subcomponent-extracted',
               componentName: parentName,
@@ -118,7 +123,7 @@ figma.ui.onmessage = async (msg) => {
                 rawFigma: result.rawFigma,
                 screenshot: result.screenshot,
                 assets: result.assets,
-                metadata: result.metadata,
+                metadata,
                 skipReExport: true
               }
             });
