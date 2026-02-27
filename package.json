@@ -10,7 +10,9 @@
     "build:watch": "esbuild src/code.ts --bundle --outfile=code.js --target=es6 --watch",
     "typecheck": "tsc --noEmit",
     "server": "node server.js",
-    "dev": "node --watch server.js & npm run build:watch"
+    "dev": "node --watch server.js & npm run build:watch",
+    "test:visual": "node scripts/test-visual-fidelity.js",
+    "test:visual:skip": "node scripts/test-visual-fidelity.js --skip-extract --output-dir ./output --verbose"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -20,6 +22,9 @@
   "devDependencies": {
     "@figma/plugin-typings": "^1.90.0",
     "esbuild": "^0.27.3",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.58.2",
+    "pngjs": "^7.0.0",
     "typescript": "^5.3.3"
   }
 }
