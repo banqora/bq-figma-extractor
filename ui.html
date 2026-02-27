@@ -577,9 +577,82 @@
         document.getElementById('outputDir').value = data.outputDir;
       }
       showStatus('Server connected. Select frames in Figma and click "Load from Selection".', 'success');
+
+      // Start polling for automated extraction triggers
+      startExtractionPolling();
     }).catch(() => {
       showStatus('Server not running. Start it with: npm run server', 'info');
     });
+
+    // --- Automated extraction polling (Approach B) ---
+    // Poll the server for pending extraction requests queued via POST /trigger-extract
+    let pollingActive = true;
+    function startExtractionPolling() {
+      setInterval(async () => {
+        if (!pollingActive || extractBtn.disabled) return;
+        try {
+          const res = await fetch(`${serverUrl}/pending-extract`);
+          const data = await res.json();
+          if (!data.pending) return;
+
+          console.log('[auto] Received extraction trigger from server:', data);
+
+          // Apply config
+          if (data.assetPathPrefix) {
+            document.getElementById('assetPathPrefix').value = data.assetPathPrefix;
+          }
+          if (data.decompose !== undefined) {
+            document.getElementById('decompose').checked = data.decompose;
+          }
+
+          // Set the components config
+          configTextarea.value = JSON.stringify(data.components, null, 2);
+
+          // Report status to server
+          fetch(`${serverUrl}/extraction-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state: 'extracting', message: 'Plugin started extraction' })
+          }).catch(() => {});
+
+          // Trigger extraction (same as clicking the button)
+          extractBtn.click();
+        } catch (e) {
+          // Server not reachable, skip
+        }
+      }, 2000);
+    }
+
+    // Patch the extraction-complete handler to also report status to server
+    const originalOnMessage = window.onmessage;
+    window.onmessage = async (event) => {
+      // Call the original handler
+      await originalOnMessage(event);
+
+      const msg = event.data.pluginMessage;
+      if (msg.type === 'extraction-complete') {
+        // Report completion to the server
+        fetch(`${serverUrl}/extraction-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            state: 'complete',
+            message: msg.message || 'Extraction complete'
+          })
+        }).catch(() => {});
+      }
+      if (msg.type === 'error') {
+        fetch(`${serverUrl}/extraction-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            state: 'error',
+            message: msg.message || 'Extraction error',
+            error: msg.message
+          })
+        }).catch(() => {});
+      }
+    };
   </script>
 </body>
 </html>

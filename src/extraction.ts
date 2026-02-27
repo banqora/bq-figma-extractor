@@ -260,12 +260,15 @@ export async function extractRootAssets(
                 }
               }
             } else {
-              // Complex fill — export the baked visual via exportAsync
+              // Complex fill — export the baked visual via exportAsync at 2x for hi-DPI
               const safeId = n.id.replace(/[^a-zA-Z0-9]/g, '_');
               if (!assets.some(a => a.name === `img_${safeId}`)) {
                 try {
                   if ('exportAsync' in n && typeof n.exportAsync === 'function') {
-                    const pngBytes = await n.exportAsync({ format: 'PNG' });
+                    const pngBytes = await n.exportAsync({
+                      format: 'PNG',
+                      constraint: { type: 'SCALE', value: 2 }
+                    });
                     assets.push({
                       name: `img_${safeId}`,
                       data: pngBytes,
@@ -274,6 +277,52 @@ export async function extractRootAssets(
                   }
                 } catch (error) {
                   // Skip failed exports
+                }
+              }
+            }
+          }
+        }
+
+        // For RECTANGLE nodes with gradient fills (no image fill), export via
+        // exportAsync so the gradient is pixel-perfect rather than approximated by CSS.
+        // Only export when the gradient is mostly visible (render bounds close to node
+        // bounds). Heavily clipped gradients (decorative backgrounds) should use CSS
+        // gradient fallback since exportAsync clips them to nothing useful.
+        if (n.type === 'RECTANGLE') {
+          const hasImageFill = fills.some(f => f.type === 'IMAGE' && f.visible !== false);
+          const hasGradientFill = fills.some(f =>
+            (f.type === 'GRADIENT_LINEAR' || f.type === 'GRADIENT_RADIAL' ||
+             f.type === 'GRADIENT_ANGULAR' || f.type === 'GRADIENT_DIAMOND') && f.visible !== false
+          );
+          if (!hasImageFill && hasGradientFill) {
+            // Check if the gradient is mostly visible (not heavily clipped)
+            let isMostlyVisible = true;
+            if ('absoluteRenderBounds' in n && n.absoluteRenderBounds) {
+              const rb = n.absoluteRenderBounds as { width?: number; height?: number };
+              const nodeW = n.width;
+              const nodeH = n.height;
+              // Empty render bounds (no visible pixels) or heavily clipped: skip PNG export
+              if (!rb.width || !rb.height || rb.width < nodeW * 0.3 || rb.height < nodeH * 0.3) {
+                isMostlyVisible = false;
+              }
+            }
+            if (isMostlyVisible) {
+              const safeId = n.id.replace(/[^a-zA-Z0-9]/g, '_');
+              if (!assets.some(a => a.name === `grad_${safeId}`)) {
+                try {
+                  if ('exportAsync' in n && typeof n.exportAsync === 'function') {
+                    const pngBytes = await n.exportAsync({
+                      format: 'PNG',
+                      constraint: { type: 'SCALE', value: 2 }
+                    });
+                    assets.push({
+                      name: `grad_${safeId}`,
+                      data: pngBytes,
+                      format: 'png'
+                    });
+                  }
+                } catch (error) {
+                  // Skip failed gradient exports
                 }
               }
             }
@@ -299,6 +348,40 @@ export async function extractRootAssets(
                 }
               } catch (error) {
                 // Skip failed images
+              }
+            }
+          }
+        }
+      }
+
+      // Export decorative GROUP nodes (containing only RECTANGLEs) as composited PNG.
+      // These are typically background decorations (gradients + images) that are heavily
+      // clipped. Exporting via exportAsync gives pixel-perfect rendering instead of
+      // approximating gradients in CSS.
+      if (n.type === 'GROUP' && 'children' in n && Array.isArray(n.children)) {
+        const allRects = n.children.length > 0 && n.children.every((c: SceneNode) => c.type === 'RECTANGLE');
+        if (allRects && 'absoluteRenderBounds' in n && n.absoluteRenderBounds) {
+          const rb = n.absoluteRenderBounds as { width: number; height: number };
+          const nodeW = n.width;
+          const nodeH = n.height;
+          // Only export if significantly clipped (render bounds < 50% of node bounds)
+          if (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5) {
+            const safeId = n.id.replace(/[^a-zA-Z0-9]/g, '_');
+            if (!assets.some(a => a.name === `grp_${safeId}`)) {
+              try {
+                if ('exportAsync' in n && typeof n.exportAsync === 'function') {
+                  const pngBytes = await n.exportAsync({
+                    format: 'PNG',
+                    constraint: { type: 'SCALE', value: 2 }
+                  });
+                  assets.push({
+                    name: `grp_${safeId}`,
+                    data: pngBytes,
+                    format: 'png'
+                  });
+                }
+              } catch (error) {
+                // Skip failed group exports
               }
             }
           }

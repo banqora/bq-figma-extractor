@@ -1,0 +1,19 @@
+{
+  "components": [
+    {
+      "id": "1538:3250",
+      "name": "contact-page",
+      "title": "Contact page",
+      "children": [
+        {
+          "id": "1627:4855",
+          "name": "contact-page",
+          "title": "Contact page"
+        }
+      ]
+    }
+  ],
+  "outputDir": "./output",
+  "decompose": true,
+  "threshold": 0.15
+}

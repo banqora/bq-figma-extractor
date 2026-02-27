@@ -42,6 +42,12 @@ app.use(express.json({ limit: '500mb' }));
 // Maps subcomponent name (last path segment) -> { componentName, fullPath }
 let subComponentRegistry = {};
 
+// --- Automated extraction trigger (Approach B) ---
+// Pending extraction request that the plugin UI will poll for
+let pendingExtraction = null;
+// Current extraction status for the test script to poll
+let extractionStatus = { state: 'idle', message: '', components: [], startedAt: null, completedAt: null };
+
 // Mirror an asset to the secondary assets directory (if configured)
 async function mirrorAsset(filename, data) {
   if (!ASSETS_MIRROR_DIR) return;
@@ -502,6 +508,7 @@ app.get('/view/preview/:componentPath(*)', async (req, res) => {
 
     const dirParam = req.query.dir ? '?dir=' + encodeURIComponent(req.query.dir) : '';
     const dirQs = req.query.dir ? '&dir=' + encodeURIComponent(req.query.dir) : '';
+    const noHeader = req.query['no-header'] === '1' || req.query['no-header'] === 'true';
 
     res.type('html').send(`<!DOCTYPE html>
 <html>
@@ -513,20 +520,20 @@ app.get('/view/preview/:componentPath(*)', async (req, res) => {
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
 <style>
-  body { margin: 0; background: #f0f0f0; }
+  body { margin: 0; background: ${noHeader ? '#fff' : '#f0f0f0'}; }
   .preview-bar { background: #1a1a1a; color: #fff; padding: 8px 16px; font-family: -apple-system, sans-serif; font-size: 13px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50; }
   .preview-bar a { color: #8bb4ff; text-decoration: none; }
   .preview-bar a:hover { text-decoration: underline; }
-  #preview-root { background: #fff; transform-origin: top left; }
+  #preview-root { background: #fff; transform-origin: top left; ${noHeader ? 'display: inline-block;' : ''} }
   .preview-error { padding: 24px; color: #d32f2f; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
   .preview-loading { padding: 24px; color: #666; font-family: -apple-system, sans-serif; font-size: 14px; }
 </style>
 </head>
 <body>
-<div class="preview-bar">
+${noHeader ? '' : `<div class="preview-bar">
   <span>${escapeHtml(componentPath)}</span>
   <a href="/view${dirParam}">Back to all components</a>
-</div>
+</div>`}
 <div id="preview-root"><div class="preview-loading">Loading preview...</div></div>
 <script>
 (async function() {
@@ -1097,6 +1104,67 @@ ${components.map(c => {
 function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// --- Automated extraction trigger endpoints ---
+
+// POST /trigger-extract — called by test scripts to queue an extraction.
+// The plugin UI polls /pending-extract and picks this up.
+app.post('/trigger-extract', (req, res) => {
+  const { components, outputDir, decompose = true, assetPathPrefix = '/figma-assets' } = req.body;
+  if (!components || !Array.isArray(components) || components.length === 0) {
+    return res.status(400).json({ error: 'components array is required' });
+  }
+
+  // Optionally set output dir
+  if (outputDir && !OUTPUT_DIR_LOCKED) {
+    OUTPUT_DIR = path.resolve(outputDir);
+    console.log(`\n📁 Output directory set to: ${OUTPUT_DIR} (via trigger-extract)`);
+  }
+
+  pendingExtraction = { components, decompose, assetPathPrefix, queuedAt: Date.now() };
+  extractionStatus = {
+    state: 'pending',
+    message: 'Extraction queued, waiting for plugin to pick up...',
+    components: components.map(c => c.name || c.id),
+    startedAt: null,
+    completedAt: null
+  };
+
+  console.log(`\n🤖 Extraction triggered via API for ${components.length} component(s)`);
+  res.json({ success: true, message: `Queued ${components.length} component(s) for extraction` });
+});
+
+// GET /pending-extract — polled by the plugin UI to check for pending work
+app.get('/pending-extract', (req, res) => {
+  if (pendingExtraction) {
+    const extraction = pendingExtraction;
+    pendingExtraction = null; // consume it
+    extractionStatus.state = 'extracting';
+    extractionStatus.message = 'Plugin picked up extraction request';
+    extractionStatus.startedAt = Date.now();
+    console.log('  → Plugin picked up pending extraction');
+    res.json({ pending: true, ...extraction });
+  } else {
+    res.json({ pending: false });
+  }
+});
+
+// POST /extraction-status — called by the plugin UI to report progress/completion
+app.post('/extraction-status', (req, res) => {
+  const { state, message, error } = req.body;
+  if (state) extractionStatus.state = state;
+  if (message) extractionStatus.message = message;
+  if (error) extractionStatus.error = error;
+  if (state === 'complete' || state === 'error') {
+    extractionStatus.completedAt = Date.now();
+  }
+  res.json({ success: true });
+});
+
+// GET /extraction-status — polled by test scripts to wait for completion
+app.get('/extraction-status', (req, res) => {
+  res.json(extractionStatus);
+});
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', port: PORT, outputDir: OUTPUT_DIR, outputDirLocked: OUTPUT_DIR_LOCKED });
