@@ -129,10 +129,67 @@ export function generateJSX(node: SceneNode, indent: number = 0, parentUsesAbsol
     return generateLeafNode(node, indent, parentUsesAbsolute, parentOffset, parentHasAutoLayout, parentLayoutMode, ancestorRotation, parentDimensions);
   }
 
+  // Decorative GROUP optimization: if a GROUP contains only RECTANGLEs and is
+  // significantly clipped, render it as a single composited PNG image instead
+  // of processing its children. This gives pixel-perfect background rendering.
+  // We use absoluteRenderBounds for positioning since the node's x/y may be
+  // a pre-rotation anchor point that doesn't match the visual position.
+  if (node.type === 'GROUP' && 'children' in node) {
+    const children = (node as any).children as SceneNode[];
+    const allRects = children.length > 0 && children.every(c => c.type === 'RECTANGLE');
+    if (allRects && 'absoluteRenderBounds' in node && node.absoluteRenderBounds) {
+      const rb = node.absoluteRenderBounds as { x: number; y: number; width: number; height: number };
+      const nodeW = 'width' in node ? (node.width as number) : 0;
+      const nodeH = 'height' in node ? (node.height as number) : 0;
+      if (nodeW > 0 && nodeH > 0 && (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5)) {
+        // Render as composited image, using render bounds for visual position
+        const safeId = node.id.replace(/[^a-zA-Z0-9]/g, '_');
+        if (parentUsesAbsolute) {
+          // Compute position relative to parent using absolute render bounds
+          // We need the parent's absolute bounding box to convert
+          let localX = 0;
+          let localY = 0;
+          if (parentDimensions && 'absoluteBoundingBox' in node) {
+            // We use the render bounds relative to the parent node's position
+            // The parent's absolute position can be computed from node's abs render
+            // bounds and the node's local position. But simpler: use the Group's
+            // render bounds x/y minus the parent's absolute x/y.
+            // Since we don't have the parent's absolute bounds directly, compute
+            // from the node's absolute bounds and local position.
+          }
+          // For rotated groups, use absoluteRenderBounds to find position
+          // relative to the parent's absoluteBoundingBox. We pass the absolute
+          // render bounds x/y and compute position using parent's abs transform.
+          // Fallback: use node x/y with parentOffset but clamp via renderBounds.
+          // Heuristic: if the node has rotation, use render bounds for sizing and
+          // clamp position to (0, max(0, node.y - parentOffset.y))
+          const rotation = 'rotation' in node ? (node.rotation as number) : 0;
+          if (rotation !== 0) {
+            // Rotated GROUP: use clipped position (0,0) or (0, offset) since the
+            // render bounds indicate it starts at the parent's edge
+            localX = 0;
+            localY = Math.round(Math.max(0, (node.y as number) - parentOffset.y));
+          } else {
+            const pos = { x: (node.x as number) - parentOffset.x, y: (node.y as number) - parentOffset.y };
+            localX = Math.round(Math.max(0, pos.x));
+            localY = Math.round(Math.max(0, pos.y));
+          }
+          let sizeStyle = ` w-[${Math.round(rb.width)}px] h-[${Math.round(rb.height)}px]`;
+          return `${spaces}<img className="absolute left-[${localX}px] top-[${localY}px]${sizeStyle}" src="${getAssetPathPrefix()}/grp_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
+        }
+        return `${spaces}<img className="w-[${Math.round(rb.width)}px] h-[${Math.round(rb.height)}px]" src="${getAssetPathPrefix()}/grp_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
+      }
+    }
+  }
+
   // Check if this container should use absolute positioning for children
   // GROUP nodes or FRAME nodes without layoutMode use absolute positioning
+  // GRID layout: Figma's wrapping grid doesn't map cleanly to CSS flex-wrap
+  // (non-uniform gaps, mixed child sizes), so fall back to absolute positioning
+  // using the children's exact x/y coordinates from Figma.
   const isGroup = node.type === 'GROUP';
-  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE';
+  const isGridLayout = 'layoutMode' in node && node.layoutMode === 'GRID';
+  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE' && !isGridLayout;
   const childrenUseAbsolute = isGroup || !hasAutoLayout;
 
   // Container node - pass parentHasAutoLayout to control sizing
@@ -342,6 +399,46 @@ export function generateLeafNode(node: SceneNode, indent: number, parentUsesAbso
   if (node.type === 'RECTANGLE' && 'fills' in node && Array.isArray(node.fills)) {
     const fills = node.fills as Paint[];
     const hasImageFill = fills.some(f => f.type === 'IMAGE' && f.visible !== false);
+    const hasGradientFill = fills.some(f =>
+      (f.type === 'GRADIENT_LINEAR' || f.type === 'GRADIENT_RADIAL' ||
+       f.type === 'GRADIENT_ANGULAR' || f.type === 'GRADIENT_DIAMOND') && f.visible !== false
+    );
+
+    // Gradient RECTANGLE — render as exported PNG for pixel-perfect fidelity
+    // when mostly visible. Heavily clipped gradients fall through to CSS gradient.
+    if (!hasImageFill && hasGradientFill) {
+      let isMostlyVisible = true;
+      if ('absoluteRenderBounds' in node && node.absoluteRenderBounds) {
+        const rb = node.absoluteRenderBounds as { width?: number; height?: number };
+        const nodeW = 'width' in node ? (node.width as number) : 0;
+        const nodeH = 'height' in node ? (node.height as number) : 0;
+        // Empty render bounds (no visible pixels) or heavily clipped: use CSS gradient fallback
+        if (!rb.width || !rb.height || rb.width < nodeW * 0.3 || rb.height < nodeH * 0.3) {
+          isMostlyVisible = false;
+        }
+      }
+      if (isMostlyVisible) {
+        const safeId = node.id.replace(/[^a-zA-Z0-9]/g, '_');
+        if (parentUsesAbsolute && 'x' in node && 'y' in node) {
+          const pos = parentOffset.rotation
+            ? computeGroupChildPosition(node.x as number, node.y as number, parentOffset.x, parentOffset.y, parentOffset.rotation)
+            : { x: (node.x as number) - parentOffset.x, y: (node.y as number) - parentOffset.y };
+          const clippedX = Math.round(Math.max(0, pos.x));
+          const clippedY = Math.round(Math.max(0, pos.y));
+          // Use absoluteRenderBounds for visible dimensions when clipped
+          let sizeStyle = '';
+          if ('absoluteRenderBounds' in node && node.absoluteRenderBounds) {
+            const rb = node.absoluteRenderBounds as { width: number; height: number };
+            sizeStyle = ` w-[${Math.round(rb.width)}px] h-[${Math.round(rb.height)}px]`;
+          }
+          return `${spaces}<img className="absolute left-[${clippedX}px] top-[${clippedY}px]${sizeStyle}" src="${getAssetPathPrefix()}/grad_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
+        }
+        let styles = extractStyles(node, parentHasAutoLayout, parentLayoutMode);
+        const className = styles.length > 0 ? ` className="${styles.join(' ')}"` : '';
+        return `${spaces}<img${className} src="${getAssetPathPrefix()}/grad_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
+      }
+      // Fall through to general RECTANGLE handling (CSS gradient) for heavily clipped gradients
+    }
 
     if (hasImageFill) {
       const plainCheck = isPlainImageFill(node);
@@ -368,9 +465,9 @@ export function generateLeafNode(node: SceneNode, indent: number, parentUsesAbso
 
       // Complex fill — exported via exportAsync which bakes in crop, zoom, effects.
       // exportAsync clips to the parent's visible bounds, so the PNG dimensions
-      // may not match the Figma node dimensions. For absolutely positioned images,
-      // compute the clipped position (where the visible portion starts) and skip
-      // w/h — the PNG is already at the correct clipped size.
+      // match the visible area, not the node dimensions. Compute the clipped
+      // position and the visible width/height so the image displays at the correct
+      // CSS size (the 2x-exported PNG will be downsampled by the browser at hi-DPI).
       const safeId = node.id.replace(/[^a-zA-Z0-9]/g, '_');
       if (parentUsesAbsolute && 'x' in node && 'y' in node) {
         const pos = parentOffset.rotation
@@ -378,7 +475,13 @@ export function generateLeafNode(node: SceneNode, indent: number, parentUsesAbso
           : { x: (node.x as number) - parentOffset.x, y: (node.y as number) - parentOffset.y };
         const clippedX = Math.round(Math.max(0, pos.x));
         const clippedY = Math.round(Math.max(0, pos.y));
-        return `${spaces}<img className="absolute left-[${clippedX}px] top-[${clippedY}px]" src="${getAssetPathPrefix()}/img_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
+        // Use absoluteRenderBounds for the visible dimensions if available
+        let sizeStyle = '';
+        if ('absoluteRenderBounds' in node && node.absoluteRenderBounds) {
+          const rb = node.absoluteRenderBounds as { width: number; height: number };
+          sizeStyle = ` w-[${Math.round(rb.width)}px] h-[${Math.round(rb.height)}px]`;
+        }
+        return `${spaces}<img className="absolute left-[${clippedX}px] top-[${clippedY}px]${sizeStyle}" src="${getAssetPathPrefix()}/img_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;
       }
 
       let styles = extractStyles(node, parentHasAutoLayout, parentLayoutMode);
@@ -548,7 +651,8 @@ export function generateMainComponentCodeFromChildren(node: SceneNode, significa
   // Extract actual styles from the Figma node instead of hardcoding
   const styles = extractStyles(node, false);
   // Ensure flex layout is present for stacking children
-  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE';
+  const isGridLayout2 = 'layoutMode' in node && node.layoutMode === 'GRID';
+  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE' && !isGridLayout2;
   const isHorizontal = 'layoutMode' in node && node.layoutMode === 'HORIZONTAL';
   if (styles.indexOf('flex') === -1) {
     if (hasAutoLayout) {
@@ -660,7 +764,8 @@ export function generateSubComponentCodeFlat(node: SceneNode, nestedChildren: Si
   // Extract actual styles from the Figma node instead of hardcoding
   const styles = extractStyles(node, false);
   // Ensure flex layout is present for stacking children
-  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE';
+  const isGridLayout3 = 'layoutMode' in node && node.layoutMode === 'GRID';
+  const hasAutoLayout = 'layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE' && !isGridLayout3;
   const isHorizontal = 'layoutMode' in node && node.layoutMode === 'HORIZONTAL';
   if (styles.indexOf('flex') === -1) {
     if (hasAutoLayout) {

@@ -24,6 +24,19 @@ export function isPlainImageFill(node: SceneNode): { plain: true; imageHash: str
     const hasVisibleEffects = (node.effects as any[]).some(e => e.visible !== false);
     if (hasVisibleEffects) return { plain: false };
   }
+  // Check if the image is significantly clipped by its parent. When the visible render
+  // bounds are much smaller than the node's actual dimensions, the image is being
+  // cropped by overflow-hidden. In that case, use exportAsync for pixel-perfect rendering
+  // instead of relying on CSS object-cover which may scale differently.
+  if ('absoluteRenderBounds' in node && node.absoluteRenderBounds && 'width' in node && 'height' in node) {
+    const rb = node.absoluteRenderBounds as { width: number; height: number };
+    const nodeW = node.width as number;
+    const nodeH = node.height as number;
+    // If visible area is less than 80% of node size in either dimension, it's significantly clipped
+    if (rb.width < nodeW * 0.8 || rb.height < nodeH * 0.8) {
+      return { plain: false };
+    }
+  }
   return { plain: true, imageHash: fill.imageHash };
 }
 
@@ -365,9 +378,11 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
   }
 
   // Gap (skip if using SPACE_BETWEEN - gap is automatic)
+  // Also skip for GRID layout since we fall back to absolute positioning for children
   if ('itemSpacing' in node && node.itemSpacing) {
     const isSpaceBetween = 'primaryAxisAlignItems' in node && node.primaryAxisAlignItems === 'SPACE_BETWEEN';
-    if (!isSpaceBetween) {
+    const isGrid = 'layoutMode' in node && node.layoutMode === 'GRID';
+    if (!isSpaceBetween && !isGrid) {
       const gap = node.itemSpacing as number;
       styles.push(`gap-[${Number.isInteger(gap) ? gap : parseFloat(gap.toFixed(2))}px]`);
     }
@@ -485,11 +500,18 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
         }
       }
     } else {
-      // Solid fill
+      // Solid fill — check for fill-level opacity (separate from node opacity)
       const solidFill = fills.find(f => f.type === 'SOLID' && f.visible !== false);
       if (solidFill && solidFill.type === 'SOLID') {
-        const color = rgbToHex(solidFill.color);
-        styles.push(`bg-[${color}]`);
+        if (solidFill.opacity !== undefined && solidFill.opacity < 1) {
+          const r = Math.round(solidFill.color.r * 255);
+          const g = Math.round(solidFill.color.g * 255);
+          const b = Math.round(solidFill.color.b * 255);
+          styles.push(`bg-[rgba(${r},${g},${b},${solidFill.opacity})]`);
+        } else {
+          const color = rgbToHex(solidFill.color);
+          styles.push(`bg-[${color}]`);
+        }
       }
     }
   }
@@ -707,8 +729,8 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
     styles.push(`max-h-[${Math.round(node.maxHeight)}px]`);
   }
 
-  // Flex alignment (for auto-layout frames)
-  if ('layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE') {
+  // Flex alignment (for auto-layout frames, skip GRID since it uses absolute positioning)
+  if ('layoutMode' in node && node.layoutMode && node.layoutMode !== 'NONE' && node.layoutMode !== 'GRID') {
     // Main axis alignment
     if ('primaryAxisAlignItems' in node) {
       const align = node.primaryAxisAlignItems;

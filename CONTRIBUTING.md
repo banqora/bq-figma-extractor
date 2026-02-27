@@ -36,23 +36,38 @@ npx playwright install chromium
 
 ### How it works
 
-1. **Trigger** — A test script sends component config to `POST /trigger-extract` on the server.
+The test script (`scripts/test-visual-fidelity.js`) drives the entire pipeline end to end — you run one command and it handles triggering, waiting, screenshotting, and comparing automatically.
+
+1. **Trigger** — The test script sends component config to `POST /trigger-extract` on the server (port 3846).
 2. **Plugin polls** — The Figma plugin UI polls `GET /pending-extract` every 2 seconds. When it picks up a pending request, it auto-runs extraction as if you clicked "Extract Components".
 3. **Wait** — The test script polls `GET /extraction-status` until the plugin reports completion.
-4. **Screenshot** — Playwright opens each component's preview page (`/view/preview/...?no-header=1`) at 2x device scale (matching Figma's 2x export resolution) and screenshots the rendered component element.
+4. **Screenshot** — Playwright opens each component's preview page (`http://localhost:3846/view/preview/...?no-header=1`) at 2x device scale (matching Figma's 2x export resolution) and screenshots the rendered component element.
 5. **Compare** — Figma's reference screenshot is composited onto a white background (Figma exports with transparency, the browser renders on white), then compared pixel-by-pixel using pixelmatch.
 6. **Report** — Diff images and a JSON results file are saved to `output/test-results/`.
 
 ### Running the tests
 
+Start the server first (runs on port 3846):
+
+```bash
+npm run server
+```
+
+Then run the test script. For the full pipeline, Figma must be open with the plugin loaded:
+
 ```bash
 # Full pipeline: trigger extraction → wait → screenshot → compare
-# Requires: server running + Figma open with plugin loaded + component selected
-npm run server
 node scripts/test-visual-fidelity.js --config scripts/test-config.json
 
-# Test existing output without re-extracting (no Figma needed)
-npm run test:visual:skip
+# Or use the npm shortcut
+npm run test:visual -- --config scripts/test-config.json
+```
+
+To test against existing output (no Figma needed):
+
+```bash
+# Skip extraction, just screenshot and compare what's already in output/
+node scripts/test-visual-fidelity.js --skip-extract
 
 # Test a single component
 node scripts/test-visual-fidelity.js --skip-extract --component contact-page/contact-page/page-container
@@ -84,6 +99,41 @@ The `components` array uses the same format as the plugin UI's JSON config panel
 - **0% diff** = pixel-perfect match. Font rendering, anti-aliasing, and minor layout rounding typically produce 1-5% noise.
 - **>15% diff** (default threshold) = likely a real codegen issue — layout, spacing, colors, or missing elements.
 - Check `output/test-results/results.json` for structured results including dimensions and pixel counts.
+
+### Technical details: how screenshots are matched
+
+There are three gotchas that the test script handles to get accurate comparisons. If you're modifying the test pipeline or debugging false positives/negatives, you need to understand these:
+
+#### 1. No-header mode (`?no-header=1`)
+
+The viewer preview page (`/view/preview/:path`) normally renders a dark header bar with the component name and a "Back to all components" link. This bar is not part of the component and would cause every diff to fail.
+
+Adding `?no-header=1` to the preview URL suppresses the header bar entirely and sets the page background to white. The test script always uses this param. You can also use it manually in a browser for a cleaner preview.
+
+#### 2. 2x device scale factor (Figma exports at retina resolution)
+
+Figma's `exportAsync()` produces screenshots at **2x resolution** (retina). A component that is 500px wide in Figma produces a 1000px wide screenshot.
+
+The browser renders at CSS pixel dimensions (1x). To make the screenshots match, the test script creates a Playwright browser context with `deviceScaleFactor: 2` and sets the viewport to **half** the Figma screenshot dimensions:
+
+```
+Figma screenshot: 3024 x 3778 px (2x)
+Playwright viewport: 1512 x 1889 CSS px
+deviceScaleFactor: 2
+Resulting screenshot: 3024 x 3778 px (matches Figma)
+```
+
+If you change the Figma export scale or the Playwright device scale factor, the dimensions will mismatch and diffs will be meaningless.
+
+#### 3. Transparent backgrounds (Figma) vs white backgrounds (browser)
+
+Figma exports screenshots with **transparent backgrounds** (PNG alpha channel). The browser always renders on a **white background**. Without handling this, every pixel with partial transparency in the Figma screenshot would register as different.
+
+The test script composites the Figma screenshot onto a solid white background before comparison (`compositeOntoWhite()`), so both images have the same opaque white base.
+
+#### 4. Component element targeting
+
+The test script screenshots `#preview-root > *:first-child` (the actual rendered React component element) rather than the full `#preview-root` wrapper div. This avoids capturing extra whitespace around the component that would inflate the diff.
 
 ### Key server endpoints for automation
 
