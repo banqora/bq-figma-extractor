@@ -134,6 +134,8 @@ export function generateJSX(node: SceneNode, indent: number = 0, parentUsesAbsol
   // of processing its children. This gives pixel-perfect background rendering.
   // We use absoluteRenderBounds for positioning since the node's x/y may be
   // a pre-rotation anchor point that doesn't match the visual position.
+  // Also triggers when a child gradient has no absoluteRenderBounds (degenerate
+  // export), since individual rendering would lose the gradient's visual contribution.
   if (node.type === 'GROUP' && 'children' in node) {
     const children = (node as any).children as SceneNode[];
     const allRects = children.length > 0 && children.every(c => c.type === 'RECTANGLE');
@@ -141,7 +143,20 @@ export function generateJSX(node: SceneNode, indent: number = 0, parentUsesAbsol
       const rb = node.absoluteRenderBounds as { x: number; y: number; width: number; height: number };
       const nodeW = 'width' in node ? (node.width as number) : 0;
       const nodeH = 'height' in node ? (node.height as number) : 0;
-      if (nodeW > 0 && nodeH > 0 && (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5)) {
+      // Also check: if the group mixes gradient + image fills and is even slightly clipped,
+      // composite rendering is needed for correct gradient compositing.
+      const hasGradientChild = children.some(c => {
+        const fills = 'fills' in c ? (c as any).fills as Paint[] : [];
+        return Array.isArray(fills) && fills.some(f =>
+          (f.type === 'GRADIENT_LINEAR' || f.type === 'GRADIENT_RADIAL') && f.visible !== false
+        );
+      });
+      const hasImageChild = children.some(c => {
+        const fills = 'fills' in c ? (c as any).fills as Paint[] : [];
+        return Array.isArray(fills) && fills.some(f => f.type === 'IMAGE' && f.visible !== false);
+      });
+      const isMixedAndClipped = hasGradientChild && hasImageChild && (rb.width < nodeW * 0.95 || rb.height < nodeH * 0.95);
+      if (nodeW > 0 && nodeH > 0 && (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5 || isMixedAndClipped)) {
         // Render as composited image, using render bounds for visual position
         const safeId = node.id.replace(/[^a-zA-Z0-9]/g, '_');
         if (parentUsesAbsolute) {
@@ -170,6 +185,10 @@ export function generateJSX(node: SceneNode, indent: number = 0, parentUsesAbsol
             localX = 0;
             localY = Math.round(Math.max(0, (node.y as number) - parentOffset.y));
           } else {
+            // Non-rotated GROUP: The exported PNG from exportAsync is clipped to the
+            // visible area (absoluteRenderBounds), so its content starts at the parent's
+            // edge, not at the node's potentially-negative position. Clamp to 0 when
+            // the group extends beyond the parent.
             const pos = { x: (node.x as number) - parentOffset.x, y: (node.y as number) - parentOffset.y };
             localX = Math.round(Math.max(0, pos.x));
             localY = Math.round(Math.max(0, pos.y));
@@ -416,6 +435,11 @@ export function generateLeafNode(node: SceneNode, indent: number, parentUsesAbso
         if (!rb.width || !rb.height || rb.width < nodeW * 0.3 || rb.height < nodeH * 0.3) {
           isMostlyVisible = false;
         }
+      } else {
+        // No absoluteRenderBounds means Figma couldn't determine visible bounds
+        // (e.g. a white-to-transparent gradient that exports as a degenerate 1x1 PNG).
+        // Fall back to CSS gradient rendering which uses node dimensions directly.
+        isMostlyVisible = false;
       }
       if (isMostlyVisible) {
         const safeId = node.id.replace(/[^a-zA-Z0-9]/g, '_');
