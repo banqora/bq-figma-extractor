@@ -185,11 +185,13 @@ export function generateJSX(node: SceneNode, indent: number = 0, parentUsesAbsol
             localX = 0;
             localY = Math.round(Math.max(0, (node.y as number) - parentOffset.y));
           } else {
-            // Non-rotated GROUP: use actual position (may be negative when the group
-            // extends beyond the parent). The parent's overflow-hidden handles clipping.
+            // Non-rotated GROUP: The exported PNG from exportAsync is clipped to the
+            // visible area (absoluteRenderBounds), so its content starts at the parent's
+            // edge, not at the node's potentially-negative position. Clamp to 0 when
+            // the group extends beyond the parent.
             const pos = { x: (node.x as number) - parentOffset.x, y: (node.y as number) - parentOffset.y };
-            localX = Math.round(pos.x);
-            localY = Math.round(pos.y);
+            localX = Math.round(Math.max(0, pos.x));
+            localY = Math.round(Math.max(0, pos.y));
           }
           let sizeStyle = ` w-[${Math.round(rb.width)}px] h-[${Math.round(rb.height)}px]`;
           return `${spaces}<img className="absolute left-[${localX}px] top-[${localY}px]${sizeStyle}" src="${getAssetPathPrefix()}/grp_${safeId}.png" alt="" data-node-id="${node.id}" />\n`;

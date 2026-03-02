@@ -414,6 +414,22 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
     ) as GradientPaint | undefined;
 
     if (gradientFill && gradientFill.gradientStops && gradientFill.gradientStops.length >= 2) {
+      // In Figma, fills are stacked: solid fills render below gradient fills.
+      // In CSS, background-color renders below background-image, so emit
+      // the solid fill as bg-color alongside the gradient as bg-image.
+      const solidFillBelow = fills.find(f => f.type === 'SOLID' && f.visible !== false);
+      if (solidFillBelow && solidFillBelow.type === 'SOLID') {
+        if (solidFillBelow.opacity !== undefined && solidFillBelow.opacity < 1) {
+          const r = Math.round(solidFillBelow.color.r * 255);
+          const g = Math.round(solidFillBelow.color.g * 255);
+          const b = Math.round(solidFillBelow.color.b * 255);
+          styles.push(`bg-[rgba(${r},${g},${b},${solidFillBelow.opacity})]`);
+        } else {
+          const color = rgbToHex(solidFillBelow.color);
+          styles.push(`bg-[${color}]`);
+        }
+      }
+
       // Generate CSS gradient with proper direction
       const stops = gradientFill.gradientStops;
 
@@ -433,22 +449,70 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
         // Calculate angle from transform matrix for precise CSS gradient
         if (gradientFill.gradientTransform) {
           const transform = gradientFill.gradientTransform;
-          // transform is [[a, c, tx], [b, d, ty]]
-          // Figma's gradient angle: atan2(b, a) gives rotation from horizontal
-          // CSS linear-gradient angle: 0deg = to top, 90deg = to right
-          // Figma angle 0 = horizontal (to right), CSS needs 90deg for that
+          // The gradientTransform maps from node's normalized [0,1] space to
+          // gradient [0,1] space. The gradient line runs along the x-axis in
+          // gradient space (x=0 is first stop, x=1 is last stop).
+          //
+          // For any node point (nx, ny), the gradient position is:
+          //   gx = a*nx + c*ny + tx
+          // where transform = [[a, c, tx], [b, d, ty]]
+          //
+          // We compute gx at all four corners to find the visible gradient range.
+          // CSS linear-gradient always spans the full element, so we remap stop
+          // positions to account for the offset/scaling of the Figma gradient.
+          const a = transform[0][0];
+          const c = transform[0][1];
+          const tx = transform[0][2];
+
+          // Compute gradient-space x at each node corner
+          const gxCorners = [
+            a * 0 + c * 0 + tx,  // (0, 0) top-left
+            a * 1 + c * 0 + tx,  // (1, 0) top-right
+            a * 0 + c * 1 + tx,  // (0, 1) bottom-left
+            a * 1 + c * 1 + tx,  // (1, 1) bottom-right
+          ];
+          const gxMin = Math.min(...gxCorners);
+          const gxMax = Math.max(...gxCorners);
+
+          // Extract the CSS angle (same as before)
           const figmaAngle = Math.atan2(transform[1][0], transform[0][0]) * (180 / Math.PI);
-          // Convert: CSS angle = 90 - figmaAngle (to convert from "from" direction to "to" direction)
           const cssAngle = Math.round(90 - figmaAngle);
 
-          // Build gradient string with all stops (NO SPACES - breaks Tailwind arbitrary values)
-          const stopsStr = stops.map(stop => {
-            const color = getColorWithOpacity(stop);
-            const percent = Math.round(stop.position * 100);
-            return `${color}_${percent}%`;
-          }).join(',');
+          // Check if the entire visible area falls outside the gradient range.
+          // If all corners are before the first stop, the node is solid first-color.
+          // If all corners are past the last stop, the node is solid last-color.
+          const firstStopPos = stops[0].position;          // usually 0
+          const lastStopPos = stops[stops.length - 1].position;  // usually 1
 
-          styles.push(`bg-[linear-gradient(${cssAngle}deg,${stopsStr})]`);
+          if (gxMax <= firstStopPos) {
+            // Entire visible area is before the gradient — solid first color
+            styles.push(`bg-[${firstColor}]`);
+          } else if (gxMin >= lastStopPos) {
+            // Entire visible area is past the gradient — solid last color
+            styles.push(`bg-[${lastColor}]`);
+          } else {
+            // The visible range [gxMin, gxMax] overlaps the gradient.
+            // Remap each stop position from gradient space to CSS percentage.
+            // In CSS, 0% corresponds to gxMin and 100% corresponds to gxMax.
+            const gxRange = gxMax - gxMin;
+
+            // If the range is very small (nearly uniform), emit solid color
+            if (gxRange < 0.001) {
+              styles.push(`bg-[${firstColor}]`);
+            } else {
+              const stopsStr = stops.map(stop => {
+                const color = getColorWithOpacity(stop);
+                // Map from gradient position to CSS percentage
+                const cssPercent = Math.round(((stop.position - gxMin) / gxRange) * 100);
+                // Clamp to reasonable range (CSS handles <0% and >100% correctly,
+                // but clamping keeps the output clean)
+                const clampedPercent = Math.max(-50, Math.min(150, cssPercent));
+                return `${color}_${clampedPercent}%`;
+              }).join(',');
+
+              styles.push(`bg-[linear-gradient(${cssAngle}deg,${stopsStr})]`);
+            }
+          }
         } else {
           // Fallback to simple horizontal gradient
           styles.push(`bg-gradient-to-r`);
@@ -611,14 +675,24 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
   }
 
   // Borders/Strokes
+  // Figma default stroke alignment is INSIDE. CSS border is outside the content box.
+  // Use inset box-shadow for INSIDE strokes to match Figma's rendering.
   if ('strokes' in node && Array.isArray(node.strokes) && node.strokes.length > 0) {
     const strokes = node.strokes as Paint[];
     const solidStroke = strokes.find(s => s.type === 'SOLID' && s.visible !== false);
     if (solidStroke && solidStroke.type === 'SOLID') {
       const strokeColor = rgbToHex(solidStroke.color);
       const strokeWeight = 'strokeWeight' in node && typeof node.strokeWeight === 'number' ? node.strokeWeight : 1;
-      styles.push(`border-[${strokeWeight}px]`);
-      styles.push(`border-[${strokeColor}]`);
+      const strokeAlign = 'strokeAlign' in node ? (node as any).strokeAlign : 'INSIDE';
+      if (strokeAlign === 'OUTSIDE') {
+        // Outside stroke: use CSS outline
+        styles.push(`outline-[${strokeWeight}px]`);
+        styles.push(`outline-[${strokeColor}]`);
+      } else {
+        // Inside or center stroke: use inset box-shadow to render inside the element bounds
+        // This prevents the border from being visible outside the element's background
+        styles.push(`shadow-[inset_0_0_0_${strokeWeight}px_${strokeColor}]`);
+      }
     }
     // Gradient strokes are handled in generateJSX by wrapping the element in a
     // gradient-background div (the "box behind the box" approach).
