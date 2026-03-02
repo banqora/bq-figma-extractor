@@ -346,13 +346,14 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
     let pt = n.paddingTop || 0;
     let pb = n.paddingBottom || 0;
 
-    // Check if padding over-constrains a fixed-size container
+    // Check if padding over-constrains a fixed-size container.
+    // Only skip padding when it would consume nearly all space (>90%),
+    // indicating Figma centering truly overrides padding. The 50% threshold
+    // was too aggressive — it dropped asymmetric padding (e.g. pt:210 pb:24
+    // in a 397px frame) that intentionally offsets content.
     if ('width' in n && 'height' in n && 'layoutMode' in n && n.layoutMode !== 'NONE') {
       const w = n.width as number;
       const h = n.height as number;
-      // Check each axis independently — only skip padding on axes that are fixed-size.
-      // For HORIZONTAL layout: primary axis = horizontal, counter axis = vertical.
-      // For VERTICAL layout: primary axis = vertical, counter axis = horizontal.
       const isHorizontal = n.layoutMode === 'HORIZONTAL';
       const isHorizFixed = isHorizontal
         ? (n as any).primaryAxisSizingMode === 'FIXED'
@@ -360,8 +361,8 @@ export function extractStyles(node: SceneNode, parentHasAutoLayout: boolean = fa
       const isVertFixed = isHorizontal
         ? (n as any).counterAxisSizingMode === 'FIXED'
         : (n as any).primaryAxisSizingMode === 'FIXED';
-      if (isHorizFixed && (pl + pr) > w / 2) { pl = 0; pr = 0; }
-      if (isVertFixed && (pt + pb) > h / 2) { pt = 0; pb = 0; }
+      if (isHorizFixed && (pl + pr) > w * 0.9) { pl = 0; pr = 0; }
+      if (isVertFixed && (pt + pb) > h * 0.9) { pt = 0; pb = 0; }
     }
 
     if (pl === pr && pt === pb && pl === pt && pl > 0) {

@@ -305,6 +305,11 @@ export async function extractRootAssets(
               if (!rb.width || !rb.height || rb.width < nodeW * 0.3 || rb.height < nodeH * 0.3) {
                 isMostlyVisible = false;
               }
+            } else {
+              // No absoluteRenderBounds means Figma considers this node to have no visible
+              // pixels (e.g. white-to-transparent gradient). Skip PNG export — codegen will
+              // use CSS gradient fallback instead.
+              isMostlyVisible = false;
             }
             if (isMostlyVisible) {
               const safeId = n.id.replace(/[^a-zA-Z0-9]/g, '_');
@@ -358,14 +363,28 @@ export async function extractRootAssets(
       // These are typically background decorations (gradients + images) that are heavily
       // clipped. Exporting via exportAsync gives pixel-perfect rendering instead of
       // approximating gradients in CSS.
+      // Also exports when a child has a gradient fill with no absoluteRenderBounds
+      // (degenerate export), since the group composite captures the correct compositing.
       if (n.type === 'GROUP' && 'children' in n && Array.isArray(n.children)) {
         const allRects = n.children.length > 0 && n.children.every((c: SceneNode) => c.type === 'RECTANGLE');
         if (allRects && 'absoluteRenderBounds' in n && n.absoluteRenderBounds) {
           const rb = n.absoluteRenderBounds as { width: number; height: number };
           const nodeW = n.width;
           const nodeH = n.height;
-          // Only export if significantly clipped (render bounds < 50% of node bounds)
-          if (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5) {
+          // Also export if the group mixes gradient + image fills and is even slightly clipped.
+          // These background groups need composite rendering for correct gradient compositing.
+          const hasGradientChild = n.children.some((c: SceneNode) => {
+            const fills = 'fills' in c ? (c as any).fills : [];
+            return Array.isArray(fills) && fills.some((f: any) =>
+              (f.type === 'GRADIENT_LINEAR' || f.type === 'GRADIENT_RADIAL') && f.visible !== false
+            );
+          });
+          const hasImageChild = n.children.some((c: SceneNode) => {
+            const fills = 'fills' in c ? (c as any).fills : [];
+            return Array.isArray(fills) && fills.some((f: any) => f.type === 'IMAGE' && f.visible !== false);
+          });
+          const isMixedAndClipped = hasGradientChild && hasImageChild && (rb.width < nodeW * 0.95 || rb.height < nodeH * 0.95);
+          if (rb.width < nodeW * 0.5 || rb.height < nodeH * 0.5 || isMixedAndClipped) {
             const safeId = n.id.replace(/[^a-zA-Z0-9]/g, '_');
             if (!assets.some(a => a.name === `grp_${safeId}`)) {
               try {
